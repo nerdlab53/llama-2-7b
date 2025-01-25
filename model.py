@@ -21,6 +21,32 @@ class ModelArgs:
     max_seq_len: int = 2048
     device: str = None
 
+def precompute_theta_pos_frequencies(head_dim: int, seq_len: int, device: str, theta: float = 10000.0):
+    # Dimension of the embedding must be even 
+    assert head_dim % 2, 'Embedding dimesion must be divisible by 2'
+    '''
+    Building the theta parameters now, acoording to the paper, the theta_i = 10000 ^ (-2 * (i -1) / dim) for i = [1, 2, ...., dim/2]
+    Shape : (head_dim / 2)
+    '''
+    theta_numerator = torch.arange(0, head_dim, 2).float()
+    '''
+    Shape : (head_dim / 2)
+    '''
+    theta = 1.0 / (theta ** (theta_numerator/head_dim)).to(device)
+    '''
+    Now we will create the 'm' matrix which is the positions matrix here
+    '''
+    m = torch.arange(seq_len, device=device)
+    '''
+    Now multiplying each theta with each position in the sequence
+
+    Shape : (seq_len) -> outer_product -> (seq_len, head_dim/2)
+    '''
+    freqs = torch.outer(m, theta).float()
+    freqs_complex = torch.polar(torch.ones_like(freqs)).float()
+    return freqs_complex
+
+
 class Transformer(nn.Module):
 
     def __init__(self, args: ModelArgs) -> None:
@@ -43,4 +69,16 @@ class Transformer(nn.Module):
         # (B, seq_len)
         batch_size, seq_len = tokens.shape
         assert seq_len == 1, 'Only one token at a time can be processed'
+        
+        # (B, seq_len) -> (B, seq_len, dim) 
+        h = self.tok_embeddings(tokens)
 
+        # Retrieve the pairs (m, theta) corresponding to the positions [start_pos, start_pos + seq_len]
+        freqs_complex = self.freqs_complex[start_pos:start_pos+seq_len]
+        
+        # Consecutively apply all the Encoder layers
+        for layer in self.layers:
+            h = layer(h, start_pos, freqs_complex)
+        h = self.norm(h)
+        output = self.output(h).float()
+        return output
