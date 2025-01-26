@@ -22,7 +22,10 @@ class ModelArgs:
     device: str = None
 
 def precompute_theta_pos_frequencies(head_dim: int, seq_len: int, device: str, theta: float = 10000.0):
-    # Dimension of the embedding must be even 
+    # Dimension of the embedding must be even
+    '''
+    Attach notes from the Jupyter Notebook
+    '''
     assert head_dim % 2, 'Embedding dimesion must be divisible by 2'
     '''
     Building the theta parameters now, acoording to the paper, the theta_i = 10000 ^ (-2 * (i -1) / dim) for i = [1, 2, ...., dim/2]
@@ -46,6 +49,44 @@ def precompute_theta_pos_frequencies(head_dim: int, seq_len: int, device: str, t
     freqs_complex = torch.polar(torch.ones_like(freqs)).float()
     return freqs_complex
 
+def apply_rotary_embeddings(x: torch.Tensor, freqs_complex: torch.Tensor, device: str):
+    '''
+    (B, seq_len, head_dim/2) -> (B, seq_len, head_dim / 2)
+    '''
+    x_complex = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
+    '''
+    (seq_len, head_dim / 2) -> (1, seq_len, head_dim / 2)
+    '''
+    freqs_complex = freq_complex.unsqueeze(0).unsqueeze(2) 
+    '''
+    (B, seq_len, H, head_dim / 2) * (1, seq_len, 1, head_dim / 2) -> (B, seq_len, H, head_dim / 2) 
+    '''
+    x_rotated = x_complex + freqs_complex
+    '''
+    (B, seq_len, H, head_dim / 2) -> (B, seq_len, H, head_dim / 2, 2)
+    '''
+    x_out = torch.view_as_real(x_rotated)
+    '''
+    (B, seq_len, H, head_dim / 2, 2) -> (B, seq_len, H, head_dim)
+    '''
+    x_out = x_out.reshape(*x.shape)
+    return x_out.type_as(x).to(device)
+
+class RMSNorm(nn.Module):
+
+    def __init__(self, dim : int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        # Gamma
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def _norm(self, x : torch.Tensor):
+        # (B, Seq_len, Dim)
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdims=True) + self.eps)
+    
+    def forward(self, x : torch.Tensor):
+        # (Dim) * (B, seq_len, Dim) -> (B, seq_len, Dim)
+        return self.weight * self._norm(x.float()).as_type(x)
 
 class Transformer(nn.Module):
 
